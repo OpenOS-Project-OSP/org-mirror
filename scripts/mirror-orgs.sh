@@ -90,27 +90,39 @@ mirror_repo() {
   local clonedir="${tmpdir}/${name}.git"
 
   # Bare clone from source
-  if ! git clone --bare \
+  local clone_output
+  if ! clone_output=$(git clone --bare \
     "https://x-access-token:${MIRROR_TOKEN}@github.com/${SOURCE_ORG}/${name}.git" \
-    "$clonedir" 2>&1; then
+    "$clonedir" 2>&1); then
     echo "    failed: could not clone ${SOURCE_ORG}/${name}"
+    echo "    ${clone_output}" | sed "s/${MIRROR_TOKEN}/***TOKEN***/g"
     rm -rf "$tmpdir"
     return 1
   fi
 
-  # Push mirror to target
+  # Push mirror to target (retry up to 3 times for newly created repos)
   cd "$clonedir" || return 1
-  if ! git push --mirror \
-    "https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_ORG}/${name}.git" 2>&1; then
-    echo "    failed: could not push to ${TARGET_ORG}/${name}"
-    cd /
-    rm -rf "$tmpdir"
-    return 1
-  fi
+  local push_output
+  local attempt=0
+  while (( attempt < 3 )); do
+    if push_output=$(git push --mirror \
+      "https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_ORG}/${name}.git" 2>&1); then
+      cd /
+      rm -rf "$tmpdir"
+      return 0
+    fi
+    attempt=$(( attempt + 1 ))
+    if (( attempt < 3 )); then
+      echo "    push attempt ${attempt} failed, retrying in 5s..."
+      sleep 5
+    fi
+  done
 
+  echo "    failed: could not push to ${TARGET_ORG}/${name}"
+  echo "    ${push_output}" | sed "s/${MIRROR_TOKEN}/***TOKEN***/g"
   cd /
   rm -rf "$tmpdir"
-  return 0
+  return 1
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -149,8 +161,8 @@ for line in "${repo_lines[@]}"; do
     echo "  Creating ${TARGET_ORG}/${name}..."
     if create_target_repo "$name" "$description" "$private"; then
       created=$(( created + 1 ))
-      # Brief pause for GitHub to initialize the repo
-      sleep 2
+      # Wait for GitHub to initialize the repo before pushing
+      sleep 5
     else
       echo "    failed: could not create repo"
       failed=$(( failed + 1 ))
