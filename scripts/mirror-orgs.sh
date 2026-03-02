@@ -107,14 +107,29 @@ mirror_repo() {
   cd "$clonedir" || return 1
   local attempt=0
   local push_ok=false
+  local push_output=""
   while (( attempt < 3 )); do
-    if git push --all --force "$target_url" 2>&1 | sanitize; then
+    push_output=$(git push --all --force "$target_url" 2>&1) || true
+    local sanitized
+    sanitized=$(echo "$push_output" | sanitize)
+
+    if ! echo "$push_output" | grep -q "remote rejected"; then
+      echo "$sanitized"
       # Also push tags
       git push --tags --force "$target_url" 2>&1 | sanitize || true
       push_ok=true
       break
     fi
+
+    # Don't retry if the error is a scope/permission issue
+    if echo "$push_output" | grep -q "without \`workflow\` scope"; then
+      echo "$sanitized"
+      echo "    ERROR: MIRROR_TOKEN needs the 'workflow' scope to push repos containing .github/workflows/"
+      break
+    fi
+
     attempt=$(( attempt + 1 ))
+    echo "$sanitized"
     if (( attempt < 3 )); then
       echo "    push attempt ${attempt} failed, retrying in 5s..."
       sleep 5
@@ -193,5 +208,9 @@ echo "  Repos created:   ${created}"
 echo "  Repos failed:    ${failed}"
 echo "========================================"
 
-[[ "$failed" -gt 0 ]] && exit 1
+if [[ "$synced" -eq 0 && "$failed" -gt 0 ]]; then
+  echo ""
+  echo "All repos failed. Check MIRROR_TOKEN permissions (needs: repo, admin:org, workflow)."
+  exit 1
+fi
 exit 0
