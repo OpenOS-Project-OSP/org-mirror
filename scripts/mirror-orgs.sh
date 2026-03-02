@@ -5,9 +5,13 @@
 #
 # Requires: MIRROR_TOKEN, SOURCE_ORG, TARGET_ORG
 #
-set -uo pipefail
+set -o pipefail
 
-: "${MIRROR_TOKEN:?MIRROR_TOKEN is required}"
+if [[ -z "${MIRROR_TOKEN:-}" ]]; then
+  echo "ERROR: MIRROR_TOKEN secret is not set."
+  echo "Add it at: Settings → Secrets and variables → Actions → New repository secret"
+  exit 1
+fi
 : "${SOURCE_ORG:?SOURCE_ORG is required}"
 : "${TARGET_ORG:?TARGET_ORG is required}"
 
@@ -83,20 +87,21 @@ mirror_repo() {
   local name="$1" default_branch="$2"
   local tmpdir
   tmpdir=$(mktemp -d)
+  local clonedir="${tmpdir}/${name}.git"
 
   # Bare clone from source
   if ! git clone --bare \
     "https://x-access-token:${MIRROR_TOKEN}@github.com/${SOURCE_ORG}/${name}.git" \
-    "$tmpdir" 2>/dev/null; then
+    "$clonedir" 2>&1; then
     echo "    failed: could not clone ${SOURCE_ORG}/${name}"
     rm -rf "$tmpdir"
     return 1
   fi
 
   # Push mirror to target
-  cd "$tmpdir" || return 1
+  cd "$clonedir" || return 1
   if ! git push --mirror \
-    "https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_ORG}/${name}.git" 2>/dev/null; then
+    "https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_ORG}/${name}.git" 2>&1; then
     echo "    failed: could not push to ${TARGET_ORG}/${name}"
     cd /
     rm -rf "$tmpdir"
@@ -109,6 +114,15 @@ mirror_repo() {
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
+
+# Validate token has access
+echo "Validating token..."
+if ! gh_api GET "${API}/user" >/dev/null 2>&1; then
+  echo "ERROR: MIRROR_TOKEN is invalid or lacks required permissions."
+  exit 1
+fi
+echo "Token OK."
+echo ""
 
 echo "Fetching repos from ${SOURCE_ORG}..."
 mapfile -t repo_lines < <(get_source_repos)
@@ -134,21 +148,21 @@ for line in "${repo_lines[@]}"; do
   if ! repo_exists_in_target "$name"; then
     echo "  Creating ${TARGET_ORG}/${name}..."
     if create_target_repo "$name" "$description" "$private"; then
-      (( created++ ))
+      created=$(( created + 1 ))
       # Brief pause for GitHub to initialize the repo
       sleep 2
     else
       echo "    failed: could not create repo"
-      (( failed++ ))
+      failed=$(( failed + 1 ))
       continue
     fi
   fi
 
   if mirror_repo "$name" "$default_branch"; then
-    (( synced++ ))
+    synced=$(( synced + 1 ))
     echo "  done."
   else
-    (( failed++ ))
+    failed=$(( failed + 1 ))
   fi
 done
 
