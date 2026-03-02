@@ -83,33 +83,36 @@ create_target_repo() {
     -d "$payload" >/dev/null 2>&1
 }
 
+sanitize() {
+  sed "s/${MIRROR_TOKEN}/***TOKEN***/g"
+}
+
 mirror_repo() {
   local name="$1" default_branch="$2"
   local tmpdir
   tmpdir=$(mktemp -d)
   local clonedir="${tmpdir}/${name}.git"
+  local target_url="https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_ORG}/${name}.git"
 
   # Bare clone from source
-  local clone_output
-  if ! clone_output=$(git clone --bare \
+  if ! git clone --bare \
     "https://x-access-token:${MIRROR_TOKEN}@github.com/${SOURCE_ORG}/${name}.git" \
-    "$clonedir" 2>&1); then
+    "$clonedir" 2>&1 | sanitize; then
     echo "    failed: could not clone ${SOURCE_ORG}/${name}"
-    echo "    ${clone_output}" | sed "s/${MIRROR_TOKEN}/***TOKEN***/g"
     rm -rf "$tmpdir"
     return 1
   fi
 
-  # Push mirror to target (retry up to 3 times for newly created repos)
+  # Push all branches and tags to target (retry up to 3 times)
   cd "$clonedir" || return 1
-  local push_output
   local attempt=0
+  local push_ok=false
   while (( attempt < 3 )); do
-    if push_output=$(git push --mirror \
-      "https://x-access-token:${MIRROR_TOKEN}@github.com/${TARGET_ORG}/${name}.git" 2>&1); then
-      cd /
-      rm -rf "$tmpdir"
-      return 0
+    if git push --all --force "$target_url" 2>&1 | sanitize; then
+      # Also push tags
+      git push --tags --force "$target_url" 2>&1 | sanitize || true
+      push_ok=true
+      break
     fi
     attempt=$(( attempt + 1 ))
     if (( attempt < 3 )); then
@@ -118,11 +121,15 @@ mirror_repo() {
     fi
   done
 
-  echo "    failed: could not push to ${TARGET_ORG}/${name}"
-  echo "    ${push_output}" | sed "s/${MIRROR_TOKEN}/***TOKEN***/g"
   cd /
   rm -rf "$tmpdir"
-  return 1
+
+  if $push_ok; then
+    return 0
+  else
+    echo "    failed: could not push to ${TARGET_ORG}/${name}"
+    return 1
+  fi
 }
 
 # ── main ─────────────────────────────────────────────────────────────────────
