@@ -1,5 +1,7 @@
 # org-mirror
 
+[![Built with Ona](https://ona.com/build-with-ona.svg)](https://app.ona.com/#https://github.com/OpenOS-Project-OSP/org-mirror)
+
 Mirrors all repos from **OpenOS-Project-OSP** → **OpenOS-Project-Ecosystem-OOC**.
 
 Runs daily at 01:30 UTC via GitHub Actions. Can also be triggered manually.
